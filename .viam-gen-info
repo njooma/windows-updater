@@ -1,0 +1,12 @@
+{
+  "module_name": "windows_autoupdate",
+  "namespace": "njooma",
+  "language": "go",
+  "resource_type": "component",
+  "resource_subtype": "generic",
+  "model_name": "updater",
+  "enable_cloud_build": false,
+  "initialize_git": false,
+  "generator_version": "0.1.0",
+  "generated_on": "2025-01-24T22:14:20.318482Z"
+}

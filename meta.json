@@ -1,0 +1,15 @@
+{
+  "$schema": "https://dl.viam.dev/module.schema.json",
+  "module_id": "njooma:windows_autoupdate",
+  "visibility": "private",
+  "url": "",
+  "description": "Modular generic component: updater",
+  "models": [
+    {
+      "api": "rdk:component:generic",
+      "model": "njooma:windows_autoupdate:updater"
+    }
+  ],
+  "entrypoint": "./run.sh",
+  "first_run": ""
+}
