@@ -2,7 +2,7 @@
   "$schema": "https://dl.viam.dev/module.schema.json",
   "module_id": "njooma:windows_autoupdate",
   "visibility": "private",
-  "url": "",
+  "url": "https://github.com/njooma/windows-updater",
   "description": "Modular generic component: updater",
   "models": [
     {

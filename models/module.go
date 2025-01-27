@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
 	"os/exec"
+	"path"
 	"strings"
 
-	"github.com/bluenviron/gortsplib/v4/pkg/base"
 	"go.viam.com/rdk/components/generic"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
@@ -42,8 +46,10 @@ type Config struct {
 		If your model does not need a config, replace *Config in the init
 		function with resource.NoNativeConfig
 	*/
-	DownloadURL string `json:"download_url"`
-	ProgramName string `json:"program_name"`
+	DownloadURL         string `json:"download_url"`
+	InstallerPath       string `json:"installer_path"`
+	RegistryLookupKey   string `json:"registry_lookup_key"`
+	RegistryLookupValue string `json:"registry_lookup_value"`
 
 	/* Uncomment this if your model does not need to be validated
 	   and has no implicit dependecies. */
@@ -56,12 +62,15 @@ type Config struct {
 // resource being validated; e.g. "components.0".
 func (cfg *Config) Validate(path string) ([]string, error) {
 	// Add config validation code here
-	_, err := base.ParseURL(cfg.DownloadURL)
+	_, err := url.Parse(cfg.DownloadURL)
 	if err != nil {
 		return nil, fmt.Errorf("ivnalid address '%s' for component at path '%s': %w", cfg.DownloadURL, path, err)
 	}
-	if len(strings.TrimSpace(cfg.ProgramName)) <= 0 {
-		return nil, fmt.Errorf("ivnalid program name '%s' for component at path '%s': %w", cfg.ProgramName, path, err)
+	if len(strings.TrimSpace(cfg.RegistryLookupKey)) <= 0 {
+		return nil, fmt.Errorf("ivnalid registry key '%s' for component at path '%s': %w", cfg.RegistryLookupKey, path, err)
+	}
+	if len(strings.TrimSpace(cfg.RegistryLookupValue)) <= 0 {
+		return nil, fmt.Errorf("ivnalid registry value '%s' for component at path '%s': %w", cfg.RegistryLookupValue, path, err)
 	}
 	return nil, nil
 }
@@ -110,62 +119,107 @@ func (s *windowsAutoupdateUpdater) Reconfigure(ctx context.Context, deps resourc
 	return errUnimplemented
 }
 
-func toggle_uac(enabled bool) {
-	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System`, registry.WRITE)
+func (s *windowsAutoupdateUpdater) downloadUpdate(ctx context.Context) (*os.File, error) {
+	filename := path.Base(s.cfg.DownloadURL)
+	file, err := os.CreateTemp(".", fmt.Sprintf("*-%s", filename))
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("could not create download file: %w", err)
 	}
-	defer k.Close()
-	dword := uint32(1)
-	if !enabled {
-		dword = 0
-	}
-	err = k.SetDWordValue("EnableLUA", dword)
+	defer file.Close()
+
+	request, err := http.NewRequestWithContext(ctx, "GET", s.cfg.DownloadURL, nil)
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("could ont create request: %w", err)
 	}
+
+	resp, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("could not download file: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("downloading file resulted in non-OK status: %s", resp.Status)
+	}
+
+	_, err = io.Copy(file, resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("could not save downloaded file: %w", err)
+	}
+	return file, nil
+}
+
+func (s *windowsAutoupdateUpdater) uninstallExistingInstallation() error {
+	keys := []string{
+		`SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`,
+		`SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall`,
+	}
+	for _, key_name := range keys {
+		s.logger.Debugf("checking registry: %s", key_name)
+		k, err := registry.OpenKey(registry.LOCAL_MACHINE, key_name, registry.READ)
+		if err != nil {
+			s.logger.Debugf("error checking registry at %s: %w", key_name, err)
+			continue
+		}
+		defer k.Close()
+
+		subkeys, err := k.ReadSubKeyNames(0)
+		if err != nil {
+			s.logger.Debugf("error getting subkeys for %s: %w", key_name, err)
+			continue
+		}
+		for _, subkey := range subkeys {
+			s.logger.Debugf("checking subkey: %s", subkey)
+			sk, err := registry.OpenKey(registry.LOCAL_MACHINE, fmt.Sprintf(`%s\%s`, key_name, subkey), registry.READ)
+			if err != nil {
+				s.logger.Debugf("error opening subkey %s: %w", subkey, err)
+				continue
+			}
+			defer sk.Close()
+
+			lookupValue, _, err := sk.GetStringValue(s.cfg.RegistryLookupKey)
+			if err != nil {
+				s.logger.Debugf("error getting value %s: %w", s.cfg.RegistryLookupKey, err)
+				continue
+			}
+			if lookupValue == s.cfg.RegistryLookupValue {
+				script, _, err := sk.GetStringValue("QuietUninstallString")
+				if err != nil || len(strings.TrimSpace(script)) <= 0 {
+					script, _, err = sk.GetStringValue("UninstallString")
+					if err != nil {
+						return fmt.Errorf("could not find uninstall command: %w", err)
+					}
+				}
+				s.logger.Debugf("running uninstall command: %s", script)
+				cmd := exec.Command("cmd", "/C", strings.ReplaceAll(script, `"`, ``))
+				output, err := cmd.CombinedOutput()
+				if err != nil {
+					return fmt.Errorf("encountered error uninstalling program: %s", string(output[:]))
+				}
+				s.logger.Debugf("successfully uninstalled: %s", string(output[:]))
+				return nil
+			}
+		}
+	}
+	return errors.New("could not uninstall existing installation")
+}
+
+func (s *windowsAutoupdateUpdater) installUpdate(ctx context.Context, update *os.File) error {
+	s.logger.Warnf("update downloaded to: %s", update.Name())
+	return nil
 }
 
 func (s *windowsAutoupdateUpdater) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
-	key_name := `SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall`
-	k, err := registry.OpenKey(registry.LOCAL_MACHINE, key_name, registry.READ)
+	update, err := s.downloadUpdate(ctx)
+	defer os.Remove(update.Name())
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	defer k.Close()
-
-	subkeys, err := k.ReadSubKeyNames(0)
-	if err != nil {
-		panic(err)
+	if err := s.uninstallExistingInstallation(); err != nil {
+		return nil, err
 	}
-	for _, subkey := range subkeys {
-		fmt.Printf("Checking key: %s\n", subkey)
-		sk, err := registry.OpenKey(registry.LOCAL_MACHINE, fmt.Sprintf(`%s\%s`, key_name, subkey), registry.READ)
-		if err != nil {
-			panic(err)
-		}
-		defer sk.Close()
-
-		publisher, _, err := sk.GetStringValue("Publisher")
-		if err != nil {
-			continue
-		}
-		if publisher == "Kongsberg Discovery Canada Ltd." {
-			script, _, err := sk.GetStringValue("QuietUninstallString")
-			if err != nil {
-				panic(err)
-			}
-			fmt.Printf("\t%s\n", script)
-			cmd := exec.Command("cmd", "/C", strings.ReplaceAll(script, `"`, ``))
-			output, err := cmd.CombinedOutput()
-			if err != nil {
-				fmt.Println(string(output[:]))
-				panic(err)
-			}
-			fmt.Println(string(output))
-			fmt.Println("DONE")
-			break
-		}
+	if err := s.installUpdate(ctx, update); err != nil {
+		return nil, err
 	}
 	return nil, nil
 }
