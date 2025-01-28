@@ -121,38 +121,38 @@ func (s *windowsAutoupdateUpdater) Reconfigure(ctx context.Context, deps resourc
 	return nil
 }
 
-func (s *windowsAutoupdateUpdater) downloadUpdate(ctx context.Context) (*os.File, error) {
+func (s *windowsAutoupdateUpdater) downloadUpdate(ctx context.Context) (string, error) {
 	s.logger.Debugf("downloading update from: %s", s.cfg.DownloadURL)
 	filename := path.Base(s.cfg.DownloadURL)
 	file, err := os.CreateTemp(".", fmt.Sprintf("*-%s", filename))
 	if err != nil {
-		return nil, fmt.Errorf("could not create download file: %w", err)
+		return "", fmt.Errorf("could not create download file: %w", err)
 	}
 	defer file.Close()
 
 	s.logger.Debugf("destination for download: %s", file.Name())
 	request, err := http.NewRequestWithContext(ctx, "GET", s.cfg.DownloadURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("could ont create request: %w", err)
+		return "", fmt.Errorf("could ont create request: %w", err)
 	}
 
 	resp, err := http.DefaultClient.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("could not download file: %w", err)
+		return "", fmt.Errorf("could not download file: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("downloading file resulted in non-OK status: %s", resp.Status)
+		return "", fmt.Errorf("downloading file resulted in non-OK status: %s", resp.Status)
 	}
 
 	s.logger.Debug("successfully downloaded update, copying...")
 	_, err = io.Copy(file, resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("could not save downloaded file: %w", err)
+		return "", fmt.Errorf("could not save downloaded file: %w", err)
 	}
 	s.logger.Debug("updated saved")
-	return file, nil
+	return file.Name(), nil
 }
 
 // Find the installer in the downloaded update.
@@ -348,10 +348,10 @@ func (s *windowsAutoupdateUpdater) DoCommand(ctx context.Context, cmd map[string
 	if err != nil {
 		return nil, err
 	}
-	defer os.Remove(update.Name())
+	defer os.Remove(update)
 
 	// Chcek if installer exists before uninstalling anything
-	installer, dir, err := s.findInstaller(update.Name())
+	installer, dir, err := s.findInstaller(update)
 	if err != nil {
 		return nil, err
 	}
