@@ -1,6 +1,7 @@
 package models
 
 import (
+	"archive/zip"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
+	"slices"
 	"strings"
 
 	"go.viam.com/rdk/components/generic"
@@ -46,10 +49,11 @@ type Config struct {
 		If your model does not need a config, replace *Config in the init
 		function with resource.NoNativeConfig
 	*/
-	DownloadURL         string `json:"download_url"`
-	InstallerPath       string `json:"installer_path"`
-	RegistryLookupKey   string `json:"registry_lookup_key"`
-	RegistryLookupValue string `json:"registry_lookup_value"`
+	DownloadURL         string   `json:"download_url"`
+	InstallerPath       string   `json:"installer_path"`
+	InstallArgs         []string `json:"install_args"`
+	RegistryLookupKey   string   `json:"registry_lookup_key"`
+	RegistryLookupValue string   `json:"registry_lookup_value"`
 
 	/* Uncomment this if your model does not need to be validated
 	   and has no implicit dependecies. */
@@ -65,12 +69,6 @@ func (cfg *Config) Validate(path string) ([]string, error) {
 	_, err := url.Parse(cfg.DownloadURL)
 	if err != nil {
 		return nil, fmt.Errorf("ivnalid address '%s' for component at path '%s': %w", cfg.DownloadURL, path, err)
-	}
-	if len(strings.TrimSpace(cfg.RegistryLookupKey)) <= 0 {
-		return nil, fmt.Errorf("ivnalid registry key '%s' for component at path '%s': %w", cfg.RegistryLookupKey, path, err)
-	}
-	if len(strings.TrimSpace(cfg.RegistryLookupValue)) <= 0 {
-		return nil, fmt.Errorf("ivnalid registry value '%s' for component at path '%s': %w", cfg.RegistryLookupValue, path, err)
 	}
 	return nil, nil
 }
@@ -120,6 +118,7 @@ func (s *windowsAutoupdateUpdater) Reconfigure(ctx context.Context, deps resourc
 }
 
 func (s *windowsAutoupdateUpdater) downloadUpdate(ctx context.Context) (*os.File, error) {
+	s.logger.Debugf("downloading update from: %s", s.cfg.DownloadURL)
 	filename := path.Base(s.cfg.DownloadURL)
 	file, err := os.CreateTemp(".", fmt.Sprintf("*-%s", filename))
 	if err != nil {
@@ -127,6 +126,7 @@ func (s *windowsAutoupdateUpdater) downloadUpdate(ctx context.Context) (*os.File
 	}
 	defer file.Close()
 
+	s.logger.Debugf("destination for download: %s", file.Name())
 	request, err := http.NewRequestWithContext(ctx, "GET", s.cfg.DownloadURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("could ont create request: %w", err)
@@ -142,14 +142,79 @@ func (s *windowsAutoupdateUpdater) downloadUpdate(ctx context.Context) (*os.File
 		return nil, fmt.Errorf("downloading file resulted in non-OK status: %s", resp.Status)
 	}
 
+	s.logger.Debug("successfully downloaded update, copying...")
 	_, err = io.Copy(file, resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("could not save downloaded file: %w", err)
 	}
+	s.logger.Debug("updated saved")
 	return file, nil
 }
 
+// Find the installer in the downloaded update.
+// If the downloaded update is a zip, unzip first.
+// Search for something that looks like an installer.
+// Return the installer, the (unzipped) directory if in a folder, and error
+func (s *windowsAutoupdateUpdater) findInstaller(src string) (string, string, error) {
+
+	extensions := []string{".exe", ".msi", ".bat"}
+
+	if path.Ext(src) == ".zip" {
+		s.logger.Debug("update is a zip file, unzipping...")
+		dest := strings.TrimSuffix(src, path.Ext(src))
+		err := unzipUpdate(src, dest)
+		if err != nil {
+			os.RemoveAll(dest)
+			return "", "", err
+		}
+		src = dest
+	}
+
+	desc, err := os.Stat(src)
+	if err != nil {
+		return "", "", err
+	}
+
+	if desc.IsDir() {
+		if s.cfg.InstallerPath != "" {
+			installerPath := filepath.Join(desc.Name(), s.cfg.InstallerPath)
+			if _, err := os.Stat(installerPath); err != nil {
+				os.RemoveAll(desc.Name())
+				return "", "", fmt.Errorf("could not find installer at %s: %w", installerPath, err)
+			}
+			return installerPath, desc.Name(), nil
+		}
+
+		files, err := os.ReadDir(desc.Name())
+		if err != nil {
+			os.RemoveAll(desc.Name())
+			return "", "", err
+		}
+		for _, file := range files {
+			if slices.Contains(extensions, path.Ext(file.Name())) {
+				return filepath.Join(desc.Name(), file.Name()), desc.Name(), nil
+			}
+		}
+	} else {
+		if slices.Contains(extensions, path.Ext(desc.Name())) {
+			return desc.Name(), "", nil
+		}
+	}
+	return "", "", errors.New("could not find a file that resembles an installer")
+}
+
 func (s *windowsAutoupdateUpdater) uninstallExistingInstallation() error {
+	// Skip uninstall step if these config values are not provided
+	if len(strings.TrimSpace(s.cfg.RegistryLookupKey)) <= 0 {
+		s.logger.Debug("Skipping uninstall: Registry lookup key was not provided.")
+		return nil
+	}
+	if len(strings.TrimSpace(s.cfg.RegistryLookupValue)) <= 0 {
+		s.logger.Debug("Skipping uninstall: Registry lookup value was not provided.")
+		return nil
+	}
+
+	s.logger.Debugf("uninstalling program with registry key %s: %s", s.cfg.RegistryLookupKey, s.cfg.RegistryLookupValue)
 	keys := []string{
 		`SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`,
 		`SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall`,
@@ -201,26 +266,107 @@ func (s *windowsAutoupdateUpdater) uninstallExistingInstallation() error {
 			}
 		}
 	}
-	return errors.New("could not uninstall existing installation")
+	// Existing installation not found
+	s.logger.Debug("existing installation not found")
+	return nil
 }
 
-func (s *windowsAutoupdateUpdater) installUpdate(ctx context.Context, update *os.File) error {
-	s.logger.Warnf("update downloaded to: %s", update.Name())
+func unzipUpdate(src, dest string) error {
+	r, err := zip.OpenReader(src)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	os.MkdirAll(dest, 0755)
+
+	extractAndWriteFile := func(f *zip.File) error {
+		rc, err := f.Open()
+		if err != nil {
+			os.RemoveAll(dest)
+			return err
+		}
+		defer rc.Close()
+
+		p := filepath.Join(dest, f.Name)
+
+		// Check for ZipSlip (Directory traversal)
+		if !strings.HasPrefix(p, filepath.Clean(dest)+string(os.PathSeparator)) {
+			os.RemoveAll(dest)
+			return fmt.Errorf("illegal file path: %s", p)
+		}
+
+		if f.FileInfo().IsDir() {
+			os.MkdirAll(p, f.Mode())
+		} else {
+			os.MkdirAll(filepath.Dir(p), f.Mode())
+			f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+			if err != nil {
+				os.RemoveAll(dest)
+				return err
+			}
+			defer f.Close()
+
+			_, err = io.Copy(f, rc)
+			if err != nil {
+				os.RemoveAll(dest)
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, f := range r.File {
+		err := extractAndWriteFile(f)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *windowsAutoupdateUpdater) installUpdate(installer string) error {
+	s.logger.Debugf("installing update from %s", installer)
+	args := append([]string{"/C", installer}, s.cfg.InstallArgs...)
+	cmd := exec.Command("cmd", args...)
+	s.logger.Debugf("installation command: %s", s.cfg.InstallArgs)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("encountered error installing program: %s", string(output[:]))
+	}
+	s.logger.Debugf("successfully installed: %s", string(output[:]))
 	return nil
 }
 
 func (s *windowsAutoupdateUpdater) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
 	update, err := s.downloadUpdate(ctx)
-	defer os.Remove(update.Name())
 	if err != nil {
 		return nil, err
 	}
+	defer os.Remove(update.Name())
+
+	// Chcek if installer exists before uninstalling anything
+	installer, dir, err := s.findInstaller(update.Name())
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if dir != "" {
+			os.RemoveAll(dir)
+		} else {
+			os.RemoveAll(installer)
+		}
+	}()
+
 	if err := s.uninstallExistingInstallation(); err != nil {
 		return nil, err
 	}
-	if err := s.installUpdate(ctx, update); err != nil {
+
+	if err := s.installUpdate(installer); err != nil {
 		return nil, err
 	}
+
 	return nil, nil
 }
 
