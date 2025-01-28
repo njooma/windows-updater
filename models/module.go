@@ -155,6 +155,61 @@ func (s *windowsAutoupdateUpdater) downloadUpdate(ctx context.Context) (string, 
 	return file.Name(), nil
 }
 
+func unzipUpdate(src, dest string) error {
+	r, err := zip.OpenReader(src)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	os.MkdirAll(dest, 0755)
+
+	extractAndWriteFile := func(f *zip.File) error {
+		rc, err := f.Open()
+		if err != nil {
+			os.RemoveAll(dest)
+			return err
+		}
+		defer rc.Close()
+
+		p := filepath.Join(dest, f.Name)
+
+		// Check for ZipSlip (Directory traversal)
+		if !strings.HasPrefix(p, filepath.Clean(dest)+string(os.PathSeparator)) {
+			os.RemoveAll(dest)
+			return fmt.Errorf("illegal file path: %s", p)
+		}
+
+		if f.FileInfo().IsDir() {
+			os.MkdirAll(p, f.Mode())
+		} else {
+			os.MkdirAll(filepath.Dir(p), f.Mode())
+			f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+			if err != nil {
+				os.RemoveAll(dest)
+				return err
+			}
+			defer f.Close()
+
+			_, err = io.Copy(f, rc)
+			if err != nil {
+				os.RemoveAll(dest)
+				return err
+			}
+		}
+		return nil
+	}
+
+	for _, f := range r.File {
+		err := extractAndWriteFile(f)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // Find the installer in the downloaded update.
 // If the downloaded update is a zip, unzip first.
 // Search for something that looks like an installer.
@@ -272,61 +327,6 @@ func (s *windowsAutoupdateUpdater) uninstallExistingInstallation() error {
 	}
 	// Existing installation not found
 	s.logger.Debug("existing installation not found")
-	return nil
-}
-
-func unzipUpdate(src, dest string) error {
-	r, err := zip.OpenReader(src)
-	if err != nil {
-		return err
-	}
-	defer r.Close()
-
-	os.MkdirAll(dest, 0755)
-
-	extractAndWriteFile := func(f *zip.File) error {
-		rc, err := f.Open()
-		if err != nil {
-			os.RemoveAll(dest)
-			return err
-		}
-		defer rc.Close()
-
-		p := filepath.Join(dest, f.Name)
-
-		// Check for ZipSlip (Directory traversal)
-		if !strings.HasPrefix(p, filepath.Clean(dest)+string(os.PathSeparator)) {
-			os.RemoveAll(dest)
-			return fmt.Errorf("illegal file path: %s", p)
-		}
-
-		if f.FileInfo().IsDir() {
-			os.MkdirAll(p, f.Mode())
-		} else {
-			os.MkdirAll(filepath.Dir(p), f.Mode())
-			f, err := os.OpenFile(p, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
-			if err != nil {
-				os.RemoveAll(dest)
-				return err
-			}
-			defer f.Close()
-
-			_, err = io.Copy(f, rc)
-			if err != nil {
-				os.RemoveAll(dest)
-				return err
-			}
-		}
-		return nil
-	}
-
-	for _, f := range r.File {
-		err := extractAndWriteFile(f)
-		if err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 

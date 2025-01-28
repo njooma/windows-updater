@@ -48,13 +48,13 @@ Array of arguments to pass to the installer. For example, `["/quiet", "/norestar
 ### `registry_lookup_key`
 **OPTIONAL** default: `<empty string>`
 
-Used in conjunction with `registry_lookup_value` in order to identify the existing installation in the registry in order to uninstall it. The module will uninstall the first application found that matches these parameters. If not provided, the module will skip the uninstall step.
+Used in conjunction with `registry_lookup_value` in order to identify the existing installation in the registry to uninstall it. The module will uninstall the first application found that matches these parameters. If not provided, the module will skip the uninstall step.
 
 For example, you could provide the `registry_lookup_key` of "DisplayName", with the associated `registry_lookup_value` of "Some Example Program" in order to uninstall "Some Example Program". 
 
 ### `registry_lookup_value`
 **OPTIONAL** default: `<empty string>`
 
-Used in conjunction with `registry_lookup_key` in order to identify the existing installation in the registry in order to uninstall it. The module will uninstall the first application found that matches these parameters. If not provided, the module will skip the uninstall step.
+Used in conjunction with `registry_lookup_key` in order to identify the existing installation in the registry to uninstall it. The module will uninstall the first application found that matches these parameters. If not provided, the module will skip the uninstall step.
 
 For example, you could provide the `registry_lookup_key` of "DisplayName", with the associated `registry_lookup_value` of "Some Example Program" in order to uninstall "Some Example Program". 
