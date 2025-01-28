@@ -113,8 +113,12 @@ func (s *windowsAutoupdateUpdater) Name() resource.Name {
 }
 
 func (s *windowsAutoupdateUpdater) Reconfigure(ctx context.Context, deps resource.Dependencies, conf resource.Config) error {
-	// Put reconfigure code here
-	return errUnimplemented
+	newConf, err := resource.NativeConfig[*Config](conf)
+	if err != nil {
+		return err
+	}
+	s.cfg = newConf
+	return nil
 }
 
 func (s *windowsAutoupdateUpdater) downloadUpdate(ctx context.Context) (*os.File, error) {
