@@ -10,6 +10,35 @@ Update your Windows applications. Will try to
 This module tries to do everything silently, but there might be UAC prompts if the module is not run in administrator mode.
 
 ## Attributes
+The following attributes are available for this model:
+
+| Name                    | Type     | Inclusion | Description                |
+|-------------------------|----------|-----------|----------------------------|
+| `download_url`          | string   | Required  | URL of the update          |
+| `installer_path`        | string   | Optional  | Path of the installer      |
+| `install_args`          | []string | Optional  | Any args to pass           |
+| `registry_lookup_key`   | string   | Optional  | Key for uninstaller        |
+| `registry_lookup_value` | string   | Optional  | Value for uninstaller      |
+
+#### Example Configuration
+
+```json
+{
+  "installer_path": "Iss-0203\\DATSS_V0203_Setup.exe",
+  "registry_lookup_key": "Publisher",
+  "install_args": [
+    "/SP-",
+    "/VERYSILENT",
+    "/SUPPRESSMSGBOXES",
+    "/NORESTART",
+    "/quiet",
+    "/passive"
+  ],
+  "registry_lookup_value": "Kongsberg Discovery Canada Ltd.",
+  "download_url": "https://www.simrad.club/datss/setup.zip"
+}
+```
+
 ### `download_url` 
 **REQUIRED** 
 The URL of the update
@@ -58,3 +87,6 @@ For example, you could provide the `registry_lookup_key` of "DisplayName", with 
 Used in conjunction with `registry_lookup_key` in order to identify the existing installation in the registry to uninstall it. The module will uninstall the first application found that matches these parameters. If not provided, the module will skip the uninstall step.
 
 For example, you could provide the `registry_lookup_key` of "DisplayName", with the associated `registry_lookup_value` of "Some Example Program" in order to uninstall "Some Example Program". 
+
+## Usage
+Send an empty `doCommand` to this component to start the update process.
