@@ -122,7 +122,7 @@ func (s *windowsAutoupdateUpdater) Reconfigure(ctx context.Context, deps resourc
 }
 
 func (s *windowsAutoupdateUpdater) downloadUpdate(ctx context.Context) (string, error) {
-	s.logger.Debugf("downloading update from: %s", s.cfg.DownloadURL)
+	s.logger.Infof("downloading update from: %s", s.cfg.DownloadURL)
 	filename := path.Base(s.cfg.DownloadURL)
 	file, err := os.CreateTemp(".", fmt.Sprintf("*-%s", filename))
 	if err != nil {
@@ -130,7 +130,7 @@ func (s *windowsAutoupdateUpdater) downloadUpdate(ctx context.Context) (string, 
 	}
 	defer file.Close()
 
-	s.logger.Debugf("destination for download: %s", file.Name())
+	s.logger.Infof("destination for download: %s", file.Name())
 	request, err := http.NewRequestWithContext(ctx, "GET", s.cfg.DownloadURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("could ont create request: %w", err)
@@ -146,12 +146,12 @@ func (s *windowsAutoupdateUpdater) downloadUpdate(ctx context.Context) (string, 
 		return "", fmt.Errorf("downloading file resulted in non-OK status: %s", resp.Status)
 	}
 
-	s.logger.Debug("successfully downloaded update, copying...")
+	s.logger.Info("successfully downloaded update, copying...")
 	_, err = io.Copy(file, resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("could not save downloaded file: %w", err)
 	}
-	s.logger.Debug("updated saved")
+	s.logger.Info("updated saved")
 	return file.Name(), nil
 }
 
@@ -219,7 +219,7 @@ func (s *windowsAutoupdateUpdater) findInstaller(src string) (string, string, er
 	extensions := []string{".exe", ".msi", ".bat"}
 
 	if path.Ext(src) == ".zip" {
-		s.logger.Debug("update is a zip file, unzipping...")
+		s.logger.Info("update is a zip file, unzipping...")
 		dest := strings.TrimSuffix(src, path.Ext(src))
 		err := unzipUpdate(src, dest)
 		if err != nil {
@@ -265,45 +265,45 @@ func (s *windowsAutoupdateUpdater) findInstaller(src string) (string, string, er
 func (s *windowsAutoupdateUpdater) uninstallExistingInstallation() error {
 	// Skip uninstall step if these config values are not provided
 	if len(strings.TrimSpace(s.cfg.RegistryLookupKey)) <= 0 {
-		s.logger.Debug("Skipping uninstall: Registry lookup key was not provided.")
+		s.logger.Info("Skipping uninstall: Registry lookup key was not provided.")
 		return nil
 	}
 	if len(strings.TrimSpace(s.cfg.RegistryLookupValue)) <= 0 {
-		s.logger.Debug("Skipping uninstall: Registry lookup value was not provided.")
+		s.logger.Info("Skipping uninstall: Registry lookup value was not provided.")
 		return nil
 	}
 
-	s.logger.Debugf("uninstalling program with registry key %s: %s", s.cfg.RegistryLookupKey, s.cfg.RegistryLookupValue)
+	s.logger.Infof("uninstalling program with registry key %s: %s", s.cfg.RegistryLookupKey, s.cfg.RegistryLookupValue)
 	keys := []string{
 		`SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`,
 		`SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall`,
 	}
 	for _, key_name := range keys {
-		s.logger.Debugf("checking registry: %s", key_name)
+		s.logger.Infof("checking registry: %s", key_name)
 		k, err := registry.OpenKey(registry.LOCAL_MACHINE, key_name, registry.READ)
 		if err != nil {
-			s.logger.Debugf("error checking registry at %s: %w", key_name, err)
+			s.logger.Infof("error checking registry at %s: %w", key_name, err)
 			continue
 		}
 		defer k.Close()
 
 		subkeys, err := k.ReadSubKeyNames(0)
 		if err != nil {
-			s.logger.Debugf("error getting subkeys for %s: %w", key_name, err)
+			s.logger.Infof("error getting subkeys for %s: %w", key_name, err)
 			continue
 		}
 		for _, subkey := range subkeys {
-			s.logger.Debugf("checking subkey: %s", subkey)
+			s.logger.Infof("checking subkey: %s", subkey)
 			sk, err := registry.OpenKey(registry.LOCAL_MACHINE, fmt.Sprintf(`%s\%s`, key_name, subkey), registry.READ)
 			if err != nil {
-				s.logger.Debugf("error opening subkey %s: %w", subkey, err)
+				s.logger.Infof("error opening subkey %s: %w", subkey, err)
 				continue
 			}
 			defer sk.Close()
 
 			lookupValue, _, err := sk.GetStringValue(s.cfg.RegistryLookupKey)
 			if err != nil {
-				s.logger.Debugf("error getting value %s: %w", s.cfg.RegistryLookupKey, err)
+				s.logger.Infof("error getting value %s: %w", s.cfg.RegistryLookupKey, err)
 				continue
 			}
 			if lookupValue == s.cfg.RegistryLookupValue {
@@ -314,32 +314,32 @@ func (s *windowsAutoupdateUpdater) uninstallExistingInstallation() error {
 						return fmt.Errorf("could not find uninstall command: %w", err)
 					}
 				}
-				s.logger.Debugf("running uninstall command: %s", script)
+				s.logger.Infof("running uninstall command: %s", script)
 				cmd := exec.Command("cmd", "/C", strings.ReplaceAll(script, `"`, ``))
 				output, err := cmd.CombinedOutput()
 				if err != nil {
 					return fmt.Errorf("encountered error uninstalling program: %s", string(output[:]))
 				}
-				s.logger.Debugf("successfully uninstalled: %s", string(output[:]))
+				s.logger.Infof("successfully uninstalled: %s", string(output[:]))
 				return nil
 			}
 		}
 	}
 	// Existing installation not found
-	s.logger.Debug("existing installation not found")
+	s.logger.Info("existing installation not found")
 	return nil
 }
 
 func (s *windowsAutoupdateUpdater) installUpdate(installer string) error {
-	s.logger.Debugf("installing update from %s", installer)
+	s.logger.Infof("installing update from %s", installer)
 	args := append([]string{"/C", installer}, s.cfg.InstallArgs...)
 	cmd := exec.Command("cmd", args...)
-	s.logger.Debugf("installation command: %s", s.cfg.InstallArgs)
+	s.logger.Infof("installation command: %s", s.cfg.InstallArgs)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("encountered error installing program: %s", string(output[:]))
 	}
-	s.logger.Debugf("successfully installed: %s", string(output[:]))
+	s.logger.Infof("successfully installed: %s", string(output[:]))
 	return nil
 }
 

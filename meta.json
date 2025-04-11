@@ -1,15 +1,15 @@
 {
   "$schema": "https://dl.viam.dev/module.schema.json",
   "module_id": "njooma:windows_autoupdate",
-  "visibility": "private",
+  "visibility": "public_unlisted",
   "url": "https://github.com/njooma/windows-updater",
-  "description": "Modular generic component: updater",
+  "description": "Update Windows applications, optionally removing existing installations.",
   "models": [
     {
       "api": "rdk:component:generic",
       "model": "njooma:windows_autoupdate:updater"
     }
   ],
-  "entrypoint": "./run.sh",
+  "entrypoint": "windows_autoupdate.exe",
   "first_run": ""
 }
