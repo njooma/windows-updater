@@ -3,7 +3,7 @@
 
 ## Description
 Update your Windows applications. Will try to
-1. Download the update from the specified URL
+1. Download the update from the specified URL on (re)configuration
 1. Uninstall an existing installation of the same program
 1. Install the update
 
@@ -77,16 +77,16 @@ Array of arguments to pass to the installer. For example, `["/quiet", "/norestar
 ### `registry_lookup_key`
 **OPTIONAL** default: `<empty string>`
 
-Used in conjunction with `registry_lookup_value` in order to identify the existing installation in the registry to uninstall it. The module will uninstall the first application found that matches these parameters. If not provided, the module will skip the uninstall step.
+Used in conjunction with `registry_lookup_value` in order to identify any existing installations in the registry to uninstall them. The module will uninstall all applications found that match these parameters. If not provided, the module will skip the uninstall step.
 
-For example, you could provide the `registry_lookup_key` of "DisplayName", with the associated `registry_lookup_value` of "Some Example Program" in order to uninstall "Some Example Program". 
+For example, you could provide the `registry_lookup_key` of "DisplayName", with the associated `registry_lookup_value` of "Some Example Program" in order to uninstall "Some Example Program". If multiple registry items have the same registry key/value, the module will attempt to uninstall all of them.
 
 ### `registry_lookup_value`
 **OPTIONAL** default: `<empty string>`
 
-Used in conjunction with `registry_lookup_key` in order to identify the existing installation in the registry to uninstall it. The module will uninstall the first application found that matches these parameters. If not provided, the module will skip the uninstall step.
+Used in conjunction with `registry_lookup_key` in order to identify any existing installations in the registry to uninstall them. The module will uninstall all applications found that match these parameters. If not provided, the module will skip the uninstall step.
 
-For example, you could provide the `registry_lookup_key` of "DisplayName", with the associated `registry_lookup_value` of "Some Example Program" in order to uninstall "Some Example Program". 
+For example, you could provide the `registry_lookup_key` of "DisplayName", with the associated `registry_lookup_value` of "Some Example Program" in order to uninstall "Some Example Program". If multiple registry items have the same registry key/value, the module will attempt to uninstall all of them.
 
 ## Usage
-Send an empty `doCommand` to this component to start the update process.
+The module will begin to download the update immediately upon (re)configuration. Send an empty `doCommand` to this component to start the remainder of the update process.

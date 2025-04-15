@@ -112,9 +112,9 @@ Loop:
 	for {
 		select {
 		case <-t.C:
-			s.logger.Debugf("downloaded %v / %v bytes (%.2f%%)", resp.BytesComplete(), resp.Size(), 100*resp.Progress())
+			s.logger.Infof("downloaded %v / %v bytes (%.2f%%)", resp.BytesComplete(), resp.Size(), 100*resp.Progress())
 		case <-resp.Done:
-			s.logger.Debugf("downloaded %v / %v bytes (%.2f%%)", resp.BytesComplete(), resp.Size(), 100*resp.Progress())
+			s.logger.Infof("downloaded %v / %v bytes (%.2f%%)", resp.BytesComplete(), resp.Size(), 100*resp.Progress())
 			break Loop
 		}
 	}
@@ -339,20 +339,20 @@ func (s *windowsAutoupdateUpdater) DoCommand(ctx context.Context, cmd map[string
 	if err != nil {
 		return nil, err
 	}
-	defer os.Remove(update)
+	// defer os.Remove(update)
 
 	// Chcek if installer exists before uninstalling anything
-	installer, dir, err := s.findInstaller(update)
+	installer, _, err := s.findInstaller(update)
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if dir != "" {
-			os.RemoveAll(dir)
-		} else {
-			os.RemoveAll(installer)
-		}
-	}()
+	// defer func() {
+	// 	if dir != "" {
+	// 		os.RemoveAll(dir)
+	// 	} else {
+	// 		os.RemoveAll(installer)
+	// 	}
+	// }()
 
 	if err := s.uninstallExistingInstallation(); err != nil {
 		return nil, err
