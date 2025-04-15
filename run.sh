@@ -16,7 +16,7 @@ if ! (
     exit 1
 fi
 # entrypoint is bin/$MODULE as specified in meta.json
-go build -o bin/$MODULE main.go
+# go build -o bin/$MODULE main.go
 
 # tar czf module.tar.gz bin/$MODULE
 echo "Starting module..."

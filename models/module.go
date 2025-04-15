@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -14,16 +13,18 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
+	"github.com/cavaliergopher/grab/v3"
 	"go.viam.com/rdk/components/generic"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
+	"go.viam.com/utils"
 	"golang.org/x/sys/windows/registry"
 )
 
 var (
-	Updater          = resource.NewModel("njooma", "windows_autoupdate", "updater")
-	errUnimplemented = errors.New("unimplemented")
+	Updater = resource.NewModel("njooma", "windows_autoupdate", "updater")
 )
 
 func init() {
@@ -35,37 +36,14 @@ func init() {
 }
 
 type Config struct {
-	/*
-		Put config attributes here. There should be public/exported fields
-		with a `json` parameter at the end of each attribute.
-
-		Example config struct:
-			type Config struct {
-				Pin   string `json:"pin"`
-				Board string `json:"board"`
-				MinDeg *float64 `json:"min_angle_deg,omitempty"`
-			}
-
-		If your model does not need a config, replace *Config in the init
-		function with resource.NoNativeConfig
-	*/
 	DownloadURL         string   `json:"download_url"`
 	InstallerPath       string   `json:"installer_path"`
 	InstallArgs         []string `json:"install_args"`
 	RegistryLookupKey   string   `json:"registry_lookup_key"`
 	RegistryLookupValue string   `json:"registry_lookup_value"`
-
-	/* Uncomment this if your model does not need to be validated
-	   and has no implicit dependecies. */
-	// resource.TriviallyValidateConfig
 }
 
-// Validate ensures all parts of the config are valid and important fields exist.
-// Returns implicit dependencies based on the config.
-// The path is the JSON path in your robot's config (not the `Config` struct) to the
-// resource being validated; e.g. "components.0".
 func (cfg *Config) Validate(path string) ([]string, error) {
-	// Add config validation code here
 	_, err := url.Parse(cfg.DownloadURL)
 	if err != nil {
 		return nil, fmt.Errorf("ivnalid address '%s' for component at path '%s': %w", cfg.DownloadURL, path, err)
@@ -79,15 +57,10 @@ type windowsAutoupdateUpdater struct {
 	logger logging.Logger
 	cfg    *Config
 
-	cancelCtx  context.Context
-	cancelFunc func()
+	downloadWorkers  utils.StoppableWorkers
+	downloadComplete bool
 
-	/* Uncomment this if your model does not need to reconfigure. */
-	resource.TriviallyReconfigurable
-
-	// Uncomment this if the model does not have any goroutines that
-	// need to be shut down while closing.
-	resource.TriviallyCloseable
+	resource.AlwaysRebuild
 }
 
 func newWindowsAutoupdateUpdater(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -96,15 +69,16 @@ func newWindowsAutoupdateUpdater(ctx context.Context, deps resource.Dependencies
 		return nil, err
 	}
 
-	cancelCtx, cancelFunc := context.WithCancel(context.Background())
-
 	s := &windowsAutoupdateUpdater{
-		name:       rawConf.ResourceName(),
-		logger:     logger,
-		cfg:        conf,
-		cancelCtx:  cancelCtx,
-		cancelFunc: cancelFunc,
+		name:             rawConf.ResourceName(),
+		logger:           logger,
+		cfg:              conf,
+		downloadWorkers:  *utils.NewBackgroundStoppableWorkers(),
+		downloadComplete: false,
 	}
+
+	s.downloadWorkers.Add(s.downloadIgnoringReturn)
+
 	return s, nil
 }
 
@@ -112,47 +86,47 @@ func (s *windowsAutoupdateUpdater) Name() resource.Name {
 	return s.name
 }
 
-func (s *windowsAutoupdateUpdater) Reconfigure(ctx context.Context, deps resource.Dependencies, conf resource.Config) error {
-	newConf, err := resource.NativeConfig[*Config](conf)
-	if err != nil {
-		return err
-	}
-	s.cfg = newConf
-	return nil
+func (s *windowsAutoupdateUpdater) downloadIgnoringReturn(ctx context.Context) {
+	s.downloadComplete = false
+	s.downloadUpdate(ctx)
+	s.downloadComplete = true
 }
 
 func (s *windowsAutoupdateUpdater) downloadUpdate(ctx context.Context) (string, error) {
-	s.logger.Infof("downloading update from: %s", s.cfg.DownloadURL)
-	filename := path.Base(s.cfg.DownloadURL)
-	file, err := os.CreateTemp(".", fmt.Sprintf("*-%s", filename))
+	client := grab.NewClient()
+	req, err := grab.NewRequest(".", s.cfg.DownloadURL)
 	if err != nil {
-		return "", fmt.Errorf("could not create download file: %w", err)
+		return "", fmt.Errorf("could not create request: %w", err)
 	}
-	defer file.Close()
+	req = req.WithContext(ctx)
 
-	s.logger.Infof("destination for download: %s", file.Name())
-	request, err := http.NewRequestWithContext(ctx, "GET", s.cfg.DownloadURL, nil)
-	if err != nil {
-		return "", fmt.Errorf("could ont create request: %w", err)
+	// start download
+	s.logger.Infof("downloading update from: %v", req.URL())
+	resp := client.Do(req)
+
+	// start status loop
+	t := time.NewTicker(1 * time.Second)
+	defer t.Stop()
+
+Loop:
+	for {
+		select {
+		case <-t.C:
+			s.logger.Debugf("downloaded %v / %v bytes (%.2f%%)", resp.BytesComplete(), resp.Size(), 100*resp.Progress())
+		case <-resp.Done:
+			s.logger.Debugf("downloaded %v / %v bytes (%.2f%%)", resp.BytesComplete(), resp.Size(), 100*resp.Progress())
+			break Loop
+		}
 	}
 
-	resp, err := http.DefaultClient.Do(request)
-	if err != nil {
+	// check for errors
+	if err := resp.Err(); err != nil {
 		return "", fmt.Errorf("could not download file: %w", err)
 	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("downloading file resulted in non-OK status: %s", resp.Status)
-	}
-
-	s.logger.Info("successfully downloaded update, copying...")
-	_, err = io.Copy(file, resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("could not save downloaded file: %w", err)
-	}
-	s.logger.Info("updated saved")
-	return file.Name(), nil
+	// success
+	fmt.Printf("update saved to %s", resp.Filename)
+	return resp.Filename, nil
 }
 
 func unzipUpdate(src, dest string) error {
@@ -278,6 +252,9 @@ func (s *windowsAutoupdateUpdater) uninstallExistingInstallation() error {
 		`SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`,
 		`SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall`,
 	}
+
+	uninstallCount := 0
+	errors := []error{}
 	for _, key_name := range keys {
 		s.logger.Infof("checking registry: %s", key_name)
 		k, err := registry.OpenKey(registry.LOCAL_MACHINE, key_name, registry.READ)
@@ -311,22 +288,31 @@ func (s *windowsAutoupdateUpdater) uninstallExistingInstallation() error {
 				if err != nil || len(strings.TrimSpace(script)) <= 0 {
 					script, _, err = sk.GetStringValue("UninstallString")
 					if err != nil {
-						return fmt.Errorf("could not find uninstall command: %w", err)
+						errors = append(errors, fmt.Errorf("could not find uninstall command: %w", err))
+						s.logger.Errorf("could not find uninstall command: %w", err)
+						continue
 					}
 				}
 				s.logger.Infof("running uninstall command: %s", script)
 				cmd := exec.Command("cmd", "/C", strings.ReplaceAll(script, `"`, ``))
 				output, err := cmd.CombinedOutput()
 				if err != nil {
-					return fmt.Errorf("encountered error uninstalling program: %s", string(output[:]))
+					errors = append(errors, fmt.Errorf("encountered error uninstalling program: %s", string(output[:])))
+					s.logger.Errorf("encountered error uninstalling program: %s", string(output[:]))
 				}
+				uninstallCount++
 				s.logger.Infof("successfully uninstalled: %s", string(output[:]))
-				return nil
 			}
 		}
 	}
-	// Existing installation not found
-	s.logger.Info("existing installation not found")
+	if uninstallCount > 0 {
+		s.logger.Infof("uninstalled %d programs", uninstallCount)
+	} else {
+		s.logger.Info("existing installation not found")
+	}
+	if len(errors) > 0 {
+		return fmt.Errorf("encountered errors uninstalling programs: %v", errors)
+	}
 	return nil
 }
 
@@ -344,6 +330,11 @@ func (s *windowsAutoupdateUpdater) installUpdate(installer string) error {
 }
 
 func (s *windowsAutoupdateUpdater) DoCommand(ctx context.Context, cmd map[string]interface{}) (map[string]interface{}, error) {
+	for utils.SelectContextOrWait(ctx, 1*time.Second) {
+		if s.downloadComplete {
+			break
+		}
+	}
 	update, err := s.downloadUpdate(ctx)
 	if err != nil {
 		return nil, err
@@ -376,6 +367,6 @@ func (s *windowsAutoupdateUpdater) DoCommand(ctx context.Context, cmd map[string
 
 func (s *windowsAutoupdateUpdater) Close(context.Context) error {
 	// Put close code here
-	s.cancelFunc()
+	s.downloadWorkers.Stop()
 	return nil
 }
