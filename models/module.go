@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/cavaliergopher/grab/v3"
-	"github.com/docker/docker/daemon/logger"
 	"go.viam.com/rdk/components/generic"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
@@ -130,7 +129,7 @@ Loop:
 	return resp.Filename, nil
 }
 
-func unzipUpdate(src, dest string) error {
+func unzipUpdate(src, dest string, logger logging.Logger) error {
 	logger.Infof("unziping %s to %s", src, dest)
 	r, err := zip.OpenReader(src)
 	if err != nil {
@@ -197,7 +196,7 @@ func (s *windowsAutoupdateUpdater) findInstaller(src string) (string, string, er
 	if path.Ext(src) == ".zip" {
 		s.logger.Info("update is a zip file, unzipping...")
 		dest := strings.TrimSuffix(src, path.Ext(src))
-		err := unzipUpdate(src, dest)
+		err := unzipUpdate(src, dest, s.logger)
 		if err != nil {
 			os.RemoveAll(dest)
 			return "", "", err
