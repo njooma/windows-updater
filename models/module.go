@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/cavaliergopher/grab/v3"
+	"github.com/docker/docker/daemon/logger"
 	"go.viam.com/rdk/components/generic"
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
@@ -94,7 +95,7 @@ func (s *windowsAutoupdateUpdater) downloadIgnoringReturn(ctx context.Context) {
 
 func (s *windowsAutoupdateUpdater) downloadUpdate(ctx context.Context) (string, error) {
 	client := grab.NewClient()
-	req, err := grab.NewRequest(".", s.cfg.DownloadURL)
+	req, err := grab.NewRequest(os.TempDir(), s.cfg.DownloadURL)
 	if err != nil {
 		return "", fmt.Errorf("could not create request: %w", err)
 	}
@@ -125,11 +126,12 @@ Loop:
 	}
 
 	// success
-	fmt.Printf("update saved to %s", resp.Filename)
+	s.logger.Infof("update saved to %s", resp.Filename)
 	return resp.Filename, nil
 }
 
 func unzipUpdate(src, dest string) error {
+	logger.Infof("unziping %s to %s", src, dest)
 	r, err := zip.OpenReader(src)
 	if err != nil {
 		return err
@@ -293,12 +295,14 @@ func (s *windowsAutoupdateUpdater) uninstallExistingInstallation() error {
 						continue
 					}
 				}
-				s.logger.Infof("running uninstall command: %s", script)
-				cmd := exec.Command("cmd", "/C", strings.ReplaceAll(script, `"`, ``))
+				fullCommand := fmt.Sprintf("cmd /C %s", script)
+				s.logger.Infof("running uninstall command: %s", fullCommand)
+				cmd := exec.Command(fullCommand)
 				output, err := cmd.CombinedOutput()
 				if err != nil {
 					errors = append(errors, fmt.Errorf("encountered error uninstalling program: %s", string(output[:])))
 					s.logger.Errorf("encountered error uninstalling program: %s", string(output[:]))
+					continue
 				}
 				uninstallCount++
 				s.logger.Infof("successfully uninstalled: %s", string(output[:]))
@@ -334,6 +338,7 @@ func (s *windowsAutoupdateUpdater) DoCommand(ctx context.Context, cmd map[string
 		if s.downloadComplete {
 			break
 		}
+		s.logger.Info("waiting for download to complete...")
 	}
 	update, err := s.downloadUpdate(ctx)
 	if err != nil {

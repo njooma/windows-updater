@@ -8,6 +8,7 @@ build: format update-rdk
 	rm -f $(BIN_OUTPUT_PATH)/windows_autoupdate
 	go build $(LDFLAGS) -o $(BIN_OUTPUT_PATH)/windows_autoupdate main.go
 
+.PHONY: module.tar.gz
 module.tar.gz:
 	GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" .
 	rm -f $@
