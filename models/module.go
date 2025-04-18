@@ -22,6 +22,7 @@ import (
 	"go.viam.com/rdk/logging"
 	"go.viam.com/rdk/resource"
 	"go.viam.com/utils"
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -132,6 +133,13 @@ func (s *windowsAutoupdateUpdater) downloadUpdate(ctx context.Context) (string, 
 	// start download
 	s.logger.Infof("downloading update from: %v", req.URL())
 	resp := client.Do(req)
+
+	if freeSpace, err := getFreeDiskSpace(destination[:2]); err == nil {
+		if freeSpace < uint64(resp.Size()*3) {
+			resp.Cancel()
+			return "", fmt.Errorf("not enough free space on drive %s: %d bytes available, %d bytes needed", destination[:2], freeSpace, resp.Size()*3)
+		}
+	}
 
 	// start status loop
 	t := time.NewTicker(1 * time.Second)
@@ -250,6 +258,17 @@ func (s *windowsAutoupdateUpdater) setCacheDetails(details cacheDetails) error {
 		return err
 	}
 	return nil
+}
+
+func getFreeDiskSpace(drive string) (uint64, error) {
+	var freeBytesAvailable uint64
+	var totalNumberOfBytes uint64
+	var totalNumberOfFreeBytes uint64
+
+	if err := windows.GetDiskFreeSpaceEx(windows.StringToUTF16Ptr(drive), &freeBytesAvailable, &totalNumberOfBytes, &totalNumberOfFreeBytes); err != nil {
+		return 0, err
+	}
+	return freeBytesAvailable, nil
 }
 
 func unzipUpdate(src, dest string, logger logging.Logger) error {
