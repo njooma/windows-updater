@@ -36,11 +36,12 @@ func init() {
 }
 
 type Config struct {
-	DownloadURL         string   `json:"download_url"`
-	InstallerPath       string   `json:"installer_path"`
-	InstallArgs         []string `json:"install_args"`
-	RegistryLookupKey   string   `json:"registry_lookup_key"`
-	RegistryLookupValue string   `json:"registry_lookup_value"`
+	DownloadURL            string   `json:"download_url"`
+	InstallerPath          string   `json:"installer_path"`
+	InstallArgs            []string `json:"install_args"`
+	RegistryLookupKey      string   `json:"registry_lookup_key"`
+	RegistryLookupValue    string   `json:"registry_lookup_value"`
+	AbortOnUninstallErrors bool     `json:"abort_on_uninstall_errors"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, error) {
@@ -259,7 +260,6 @@ func (s *windowsAutoupdateUpdater) uninstallExistingInstallation() error {
 	uninstallCount := 0
 	errors := []error{}
 	for _, key_name := range keys {
-		s.logger.Infof("checking registry: %s", key_name)
 		k, err := registry.OpenKey(registry.LOCAL_MACHINE, key_name, registry.READ)
 		if err != nil {
 			s.logger.Infof("error checking registry at %s: %w", key_name, err)
@@ -273,7 +273,7 @@ func (s *windowsAutoupdateUpdater) uninstallExistingInstallation() error {
 			continue
 		}
 		for _, subkey := range subkeys {
-			s.logger.Infof("checking subkey: %s", subkey)
+			s.logger.Infof("checking registry key: %s\\%s", key_name, subkey)
 			sk, err := registry.OpenKey(registry.LOCAL_MACHINE, fmt.Sprintf(`%s\%s`, key_name, subkey), registry.READ)
 			if err != nil {
 				s.logger.Infof("error opening subkey %s: %w", subkey, err)
@@ -283,7 +283,7 @@ func (s *windowsAutoupdateUpdater) uninstallExistingInstallation() error {
 
 			lookupValue, _, err := sk.GetStringValue(s.cfg.RegistryLookupKey)
 			if err != nil {
-				s.logger.Infof("error getting value %s: %w", s.cfg.RegistryLookupKey, err)
+				s.logger.Infof("error getting value for key %s\\%s - %s: %w", key_name, subkey, s.cfg.RegistryLookupKey, err)
 				continue
 			}
 			if lookupValue == s.cfg.RegistryLookupValue {
@@ -296,6 +296,12 @@ func (s *windowsAutoupdateUpdater) uninstallExistingInstallation() error {
 						continue
 					}
 				}
+
+				// Force quiet uninstall if using MsiExec
+				if strings.Contains(script, "MsiExec.exe") {
+					script += " /quiet"
+				}
+
 				fullCommand := fmt.Sprintf("cmd /C %s", script)
 				s.logger.Infof("running uninstall command: %s", fullCommand)
 				cmd := exec.Command(fullCommand)
@@ -312,11 +318,10 @@ func (s *windowsAutoupdateUpdater) uninstallExistingInstallation() error {
 	}
 	if uninstallCount > 0 {
 		s.logger.Infof("uninstalled %d programs", uninstallCount)
+	} else if len(errors) > 0 {
+		return fmt.Errorf("encountered errors uninstalling programs: %v", errors)
 	} else {
 		s.logger.Info("existing installation not found")
-	}
-	if len(errors) > 0 {
-		return fmt.Errorf("encountered errors uninstalling programs: %v", errors)
 	}
 	return nil
 }
@@ -325,7 +330,7 @@ func (s *windowsAutoupdateUpdater) installUpdate(installer string) error {
 	s.logger.Infof("installing update from %s", installer)
 	args := append([]string{"/C", installer}, s.cfg.InstallArgs...)
 	cmd := exec.Command("cmd", args...)
-	s.logger.Infof("installation command: %s", s.cfg.InstallArgs)
+	s.logger.Infof("installation command: %s", args)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("encountered error installing program: %s", string(output[:]))
@@ -360,7 +365,7 @@ func (s *windowsAutoupdateUpdater) DoCommand(ctx context.Context, cmd map[string
 	// 	}
 	// }()
 
-	if err := s.uninstallExistingInstallation(); err != nil {
+	if err := s.uninstallExistingInstallation(); err != nil && s.cfg.AbortOnUninstallErrors {
 		return nil, err
 	}
 

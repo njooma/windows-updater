@@ -12,13 +12,14 @@ This module tries to do everything silently, but there might be UAC prompts if t
 ## Attributes
 The following attributes are available for this model:
 
-| Name                    | Type     | Inclusion | Description                |
-|-------------------------|----------|-----------|----------------------------|
-| `download_url`          | string   | Required  | URL of the update          |
-| `installer_path`        | string   | Optional  | Path of the installer      |
-| `install_args`          | []string | Optional  | Any args to pass           |
-| `registry_lookup_key`   | string   | Optional  | Key for uninstaller        |
-| `registry_lookup_value` | string   | Optional  | Value for uninstaller      |
+| Name                        | Type     | Inclusion | Description                                                                       |
+|-----------------------------|----------|-----------|-------------------------------------------------------------------|
+| `download_url`              | string   | Required  | URL of the update                                                 |
+| `installer_path`            | string   | Optional  | Path of the installer                                             |
+| `install_args`              | []string | Optional  | Any args to pass                                                  |
+| `registry_lookup_key`       | string   | Optional  | Key for uninstaller                                               |
+| `registry_lookup_value`     | string   | Optional  | Value for uninstaller                                             |
+| `abort_on_uninstall_errors` | bool     | Optional  | Should the update should fail if uninstallatoin encounters errors |
 
 #### Example Configuration
 
@@ -35,7 +36,8 @@ The following attributes are available for this model:
     "/passive"
   ],
   "registry_lookup_value": "Kongsberg Discovery Canada Ltd.",
-  "download_url": "https://www.simrad.club/datss/setup.zip"
+  "download_url": "https://www.simrad.club/datss/setup.zip",
+  "abort_on_uninstall_errors": true
 }
 ```
 
@@ -87,6 +89,11 @@ For example, you could provide the `registry_lookup_key` of "DisplayName", with 
 Used in conjunction with `registry_lookup_key` in order to identify any existing installations in the registry to uninstall them. The module will uninstall all applications found that match these parameters. If not provided, the module will skip the uninstall step.
 
 For example, you could provide the `registry_lookup_key` of "DisplayName", with the associated `registry_lookup_value` of "Some Example Program" in order to uninstall "Some Example Program". If multiple registry items have the same registry key/value, the module will attempt to uninstall all of them.
+
+### `abort_on_uninstall_errors`
+**OPTIONAL** default: `false`
+
+The module will first try to uninstall any existing installation (see `registry_lookup_key` and `registry_lookup_value`). Should the module encounter any errors, this flag will determine if the install process will abort or continue.
 
 ## Usage
 The module will begin to download the update immediately upon (re)configuration. Send an empty `doCommand` to this component to start the remainder of the update process.
