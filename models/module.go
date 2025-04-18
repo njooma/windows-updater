@@ -101,8 +101,8 @@ func (s *windowsAutoupdateUpdater) Name() resource.Name {
 }
 
 func (s *windowsAutoupdateUpdater) downloadIgnoringReturn(ctx context.Context) {
-	s.downloadComplete = false
-	s.downloadUpdate(ctx)
+	// s.downloadComplete = false
+	// s.downloadUpdate(ctx)
 	s.downloadComplete = true
 }
 

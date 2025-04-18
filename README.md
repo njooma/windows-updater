@@ -15,6 +15,7 @@ The following attributes are available for this model:
 | Name                        | Type     | Inclusion | Description                                                                       |
 |-----------------------------|----------|-----------|-------------------------------------------------------------------|
 | `download_url`              | string   | Required  | URL of the update                                                 |
+| `download_destination`      | string   | Optional  | Alternate destination to store the download                       |
 | `installer_path`            | string   | Optional  | Path of the installer                                             |
 | `install_args`              | []string | Optional  | Any args to pass                                                  |
 | `registry_lookup_key`       | string   | Optional  | Key for uninstaller                                               |
@@ -42,6 +43,11 @@ The following attributes are available for this model:
 ### `download_url` 
 **REQUIRED** 
 The URL of the update
+
+### `download_destination`
+**OPTIONAL** default: `os.TempDir`
+
+An alternate download directory. The default location of the download is the operating system's `temp` directory
 
 ### `installer_path` 
 **OPTIONAL** default: `<empty string>`
