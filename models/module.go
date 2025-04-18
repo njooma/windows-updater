@@ -164,7 +164,7 @@ Loop:
 	// save download details
 	cacheDetails := cacheDetails{
 		DownloadURL:   s.cfg.DownloadURL,
-		ContentLength: resp.HTTPResponse.ContentLength,
+		ContentLength: resp.Size(),
 		ETag:          resp.HTTPResponse.Header.Get("etag"),
 		Installed:     false,
 	}
@@ -187,7 +187,7 @@ func (s *windowsAutoupdateUpdater) updateHasChanged(ctx context.Context) bool {
 	}
 	resp, err := http.Head(s.cfg.DownloadURL)
 	if err != nil || resp.StatusCode != http.StatusOK {
-		s.logger.Errorf("error getting head for %s: %v", s.cfg.DownloadURL, err)
+		s.logger.Debugf("error getting head for %s: %v", s.cfg.DownloadURL, err)
 		return true
 	}
 	if resp.ContentLength != cacheDetails.ContentLength {
@@ -207,7 +207,7 @@ func (s *windowsAutoupdateUpdater) updateHasChanged(ctx context.Context) bool {
 
 func (s *windowsAutoupdateUpdater) getCacheDir() (string, error) {
 	cacheDir := filepath.Join(os.TempDir(), "viam", string(Updater.Family.Namespace), Updater.Family.Name, Updater.Name, s.name.Name)
-	if err := os.MkdirAll(filepath.Dir(cacheDir), 0755); err != nil {
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		return "", err
 	}
 	return cacheDir, nil
@@ -392,7 +392,7 @@ func (s *windowsAutoupdateUpdater) uninstallExistingInstallation() error {
 		return nil
 	}
 
-	s.logger.Infof("uninstalling program with registry key %s: %s", s.cfg.RegistryLookupKey, s.cfg.RegistryLookupValue)
+	s.logger.Infof("uninstalling program(s) with registry key %s: %s", s.cfg.RegistryLookupKey, s.cfg.RegistryLookupValue)
 	keys := []string{
 		`SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall`,
 		`SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall`,
@@ -403,28 +403,28 @@ func (s *windowsAutoupdateUpdater) uninstallExistingInstallation() error {
 	for _, key_name := range keys {
 		k, err := registry.OpenKey(registry.LOCAL_MACHINE, key_name, registry.READ)
 		if err != nil {
-			s.logger.Infof("error checking registry at %s: %w", key_name, err)
+			s.logger.Debugf("error checking registry at %s: %w", key_name, err)
 			continue
 		}
 		defer k.Close()
 
 		subkeys, err := k.ReadSubKeyNames(0)
 		if err != nil {
-			s.logger.Infof("error getting subkeys for %s: %w", key_name, err)
+			s.logger.Debugf("error getting subkeys for %s: %w", key_name, err)
 			continue
 		}
 		for _, subkey := range subkeys {
-			s.logger.Infof("checking registry key: %s\\%s", key_name, subkey)
+			s.logger.Debugf("checking registry key: %s\\%s", key_name, subkey)
 			sk, err := registry.OpenKey(registry.LOCAL_MACHINE, fmt.Sprintf(`%s\%s`, key_name, subkey), registry.READ)
 			if err != nil {
-				s.logger.Infof("error opening subkey %s: %w", subkey, err)
+				s.logger.Debugf("error opening subkey %s: %w", subkey, err)
 				continue
 			}
 			defer sk.Close()
 
 			lookupValue, _, err := sk.GetStringValue(s.cfg.RegistryLookupKey)
 			if err != nil {
-				s.logger.Infof("error getting value for key %s\\%s - %s: %w", key_name, subkey, s.cfg.RegistryLookupKey, err)
+				s.logger.Debugf("error getting value for key %s\\%s - %s: %w", key_name, subkey, s.cfg.RegistryLookupKey, err)
 				continue
 			}
 			if lookupValue == s.cfg.RegistryLookupValue {
@@ -433,7 +433,6 @@ func (s *windowsAutoupdateUpdater) uninstallExistingInstallation() error {
 					script, _, err = sk.GetStringValue("UninstallString")
 					if err != nil {
 						errors = append(errors, fmt.Errorf("could not find uninstall command: %w", err))
-						s.logger.Errorf("could not find uninstall command: %w", err)
 						continue
 					}
 				}
@@ -449,7 +448,6 @@ func (s *windowsAutoupdateUpdater) uninstallExistingInstallation() error {
 				output, err := cmd.CombinedOutput()
 				if err != nil {
 					errors = append(errors, fmt.Errorf("encountered error uninstalling program: %s", string(output[:])))
-					s.logger.Errorf("encountered error uninstalling program: %s", string(output[:]))
 					continue
 				}
 				uninstallCount++
