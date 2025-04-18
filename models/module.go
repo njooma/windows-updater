@@ -137,7 +137,9 @@ func unzipUpdate(src, dest string, logger logging.Logger) error {
 	}
 	defer r.Close()
 
-	os.MkdirAll(dest, 0755)
+	if err := os.MkdirAll(dest, 0755); err != nil {
+		return err
+	}
 
 	extractAndWriteFile := func(f *zip.File) error {
 		rc, err := f.Open()
@@ -211,27 +213,27 @@ func (s *windowsAutoupdateUpdater) findInstaller(src string) (string, string, er
 
 	if desc.IsDir() {
 		if s.cfg.InstallerPath != "" {
-			installerPath := filepath.Join(desc.Name(), s.cfg.InstallerPath)
+			installerPath := filepath.Join(src, s.cfg.InstallerPath)
 			if _, err := os.Stat(installerPath); err != nil {
-				os.RemoveAll(desc.Name())
+				os.RemoveAll(src)
 				return "", "", fmt.Errorf("could not find installer at %s: %w", installerPath, err)
 			}
-			return installerPath, desc.Name(), nil
+			return installerPath, src, nil
 		}
 
-		files, err := os.ReadDir(desc.Name())
+		files, err := os.ReadDir(src)
 		if err != nil {
-			os.RemoveAll(desc.Name())
+			os.RemoveAll(src)
 			return "", "", err
 		}
 		for _, file := range files {
 			if slices.Contains(extensions, path.Ext(file.Name())) {
-				return filepath.Join(desc.Name(), file.Name()), desc.Name(), nil
+				return filepath.Join(src, file.Name()), src, nil
 			}
 		}
 	} else {
-		if slices.Contains(extensions, path.Ext(desc.Name())) {
-			return desc.Name(), "", nil
+		if slices.Contains(extensions, path.Ext(src)) {
+			return src, "", nil
 		}
 	}
 	return "", "", errors.New("could not find a file that resembles an installer")
