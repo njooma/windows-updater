@@ -8,6 +8,7 @@ require (
 	github.com/cavaliergopher/grab/v3 v3.0.1
 	go.viam.com/rdk v0.70.0
 	go.viam.com/utils v0.1.137
+	golang.org/x/sys v0.32.0
 )
 
 require (
@@ -132,7 +133,6 @@ require (
 	golang.org/x/net v0.39.0 // indirect
 	golang.org/x/oauth2 v0.25.0 // indirect
 	golang.org/x/sync v0.13.0 // indirect
-	golang.org/x/sys v0.32.0 // indirect
 	golang.org/x/text v0.24.0 // indirect
 	golang.org/x/time v0.6.0 // indirect
 	golang.org/x/tools v0.32.0 // indirect

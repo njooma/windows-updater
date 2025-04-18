@@ -3,9 +3,11 @@ package models
 import (
 	"archive/zip"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -24,7 +26,8 @@ import (
 )
 
 var (
-	Updater = resource.NewModel("njooma", "windows_autoupdate", "updater")
+	Updater           = resource.NewModel("njooma", "windows_autoupdate", "updater")
+	errNoUpdateNeeded = errors.New("no update needed")
 )
 
 func init() {
@@ -37,17 +40,19 @@ func init() {
 
 type Config struct {
 	DownloadURL            string   `json:"download_url"`
+	DownloadDestination    string   `json:"download_destination"`
 	InstallerPath          string   `json:"installer_path"`
 	InstallArgs            []string `json:"install_args"`
 	RegistryLookupKey      string   `json:"registry_lookup_key"`
 	RegistryLookupValue    string   `json:"registry_lookup_value"`
 	AbortOnUninstallErrors bool     `json:"abort_on_uninstall_errors"`
+	ForceInstall           bool     `json:"force_install"`
 }
 
 func (cfg *Config) Validate(path string) ([]string, error) {
 	_, err := url.Parse(cfg.DownloadURL)
 	if err != nil {
-		return nil, fmt.Errorf("ivnalid address '%s' for component at path '%s': %w", cfg.DownloadURL, path, err)
+		return nil, fmt.Errorf("invalid address '%s' for component at path '%s': %w", cfg.DownloadURL, path, err)
 	}
 	return nil, nil
 }
@@ -62,6 +67,13 @@ type windowsAutoupdateUpdater struct {
 	downloadComplete bool
 
 	resource.AlwaysRebuild
+}
+
+type cacheDetails struct {
+	DownloadURL   string `json:"download_url"`
+	ContentLength int64  `json:"content_length"`
+	ETag          string `json:"etag"`
+	Installed     bool   `json:"installed"`
 }
 
 func newWindowsAutoupdateUpdater(ctx context.Context, deps resource.Dependencies, rawConf resource.Config, logger logging.Logger) (resource.Resource, error) {
@@ -94,8 +106,24 @@ func (s *windowsAutoupdateUpdater) downloadIgnoringReturn(ctx context.Context) {
 }
 
 func (s *windowsAutoupdateUpdater) downloadUpdate(ctx context.Context) (string, error) {
+	if !s.updateHasChanged(ctx) {
+		s.logger.Infof("no update needed")
+		return "", errNoUpdateNeeded
+	}
+
+	var destination string
+	if s.cfg.DownloadDestination != "" {
+		destination = s.cfg.DownloadDestination
+	} else {
+		var err error
+		destination, err = s.getCacheDir()
+		if err != nil {
+			destination = os.TempDir()
+		}
+	}
+
 	client := grab.NewClient()
-	req, err := grab.NewRequest(os.TempDir(), s.cfg.DownloadURL)
+	req, err := grab.NewRequest(destination, s.cfg.DownloadURL)
 	if err != nil {
 		return "", fmt.Errorf("could not create request: %w", err)
 	}
@@ -113,9 +141,9 @@ Loop:
 	for {
 		select {
 		case <-t.C:
-			s.logger.Infof("downloaded %v / %v bytes (%.2f%%)", resp.BytesComplete(), resp.Size(), 100*resp.Progress())
+			s.logger.Debugf("downloaded %v / %v bytes (%.2f%%)", resp.BytesComplete(), resp.Size(), 100*resp.Progress())
 		case <-resp.Done:
-			s.logger.Infof("downloaded %v / %v bytes (%.2f%%)", resp.BytesComplete(), resp.Size(), 100*resp.Progress())
+			s.logger.Debugf("downloaded %v / %v bytes (%.2f%%)", resp.BytesComplete(), resp.Size(), 100*resp.Progress())
 			break Loop
 		}
 	}
@@ -125,13 +153,107 @@ Loop:
 		return "", fmt.Errorf("could not download file: %w", err)
 	}
 
+	// save download details
+	cacheDetails := cacheDetails{
+		DownloadURL:   s.cfg.DownloadURL,
+		ContentLength: resp.HTTPResponse.ContentLength,
+		ETag:          resp.HTTPResponse.Header.Get("etag"),
+		Installed:     false,
+	}
+	s.setCacheDetails(cacheDetails)
+
 	// success
 	s.logger.Infof("update saved to %s", resp.Filename)
 	return resp.Filename, nil
 }
 
+func (s *windowsAutoupdateUpdater) updateHasChanged(ctx context.Context) bool {
+	if s.cfg.ForceInstall {
+		return true
+	}
+
+	cacheDetails := s.getCacheDetails()
+	if cacheDetails.DownloadURL != s.cfg.DownloadURL {
+		s.logger.Debugf("download URL has changed from %s to %s", cacheDetails.DownloadURL, s.cfg.DownloadURL)
+		return true
+	}
+	resp, err := http.Head(s.cfg.DownloadURL)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		s.logger.Errorf("error getting head for %s: %v", s.cfg.DownloadURL, err)
+		return true
+	}
+	if resp.ContentLength != cacheDetails.ContentLength {
+		s.logger.Debugf("content length has changed from %d to %d", cacheDetails.ContentLength, resp.ContentLength)
+		return true
+	}
+	if resp.Header.Get("etag") != cacheDetails.ETag {
+		s.logger.Debugf("etag has changed from %s to %s", cacheDetails.ETag, resp.Header.Get("etag"))
+		return true
+	}
+	if !cacheDetails.Installed {
+		s.logger.Debug("update has not changed, but has not been installed yet")
+		return true
+	}
+	return false
+}
+
+func (s *windowsAutoupdateUpdater) getCacheDir() (string, error) {
+	cacheDir := filepath.Join(os.TempDir(), "viam", string(Updater.Family.Namespace), Updater.Family.Name, Updater.Name, s.name.Name)
+	if err := os.MkdirAll(filepath.Dir(cacheDir), 0755); err != nil {
+		return "", err
+	}
+	return cacheDir, nil
+}
+
+func (s *windowsAutoupdateUpdater) getCacheDetailsFile() (string, error) {
+	cacheDir, err := s.getCacheDir()
+	if err != nil {
+		return "", err
+	}
+	cacheFile := filepath.Join(cacheDir, "cache.json")
+	f, err := os.OpenFile(cacheFile, os.O_APPEND|os.O_CREATE, 0644)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	return cacheFile, nil
+}
+
+func (s *windowsAutoupdateUpdater) getCacheDetails() cacheDetails {
+	cacheFile, err := s.getCacheDetailsFile()
+	if err != nil {
+		return cacheDetails{}
+	}
+	f, err := os.Open(cacheFile)
+	if err != nil {
+		return cacheDetails{}
+	}
+	defer f.Close()
+	var details cacheDetails
+	if err := json.NewDecoder(f).Decode(&details); err != nil {
+		return cacheDetails{}
+	}
+	return details
+}
+
+func (s *windowsAutoupdateUpdater) setCacheDetails(details cacheDetails) error {
+	cacheFile, err := s.getCacheDetailsFile()
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(cacheFile, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := json.NewEncoder(f).Encode(details); err != nil {
+		return err
+	}
+	return nil
+}
+
 func unzipUpdate(src, dest string, logger logging.Logger) error {
-	logger.Infof("unziping %s to %s", src, dest)
+	logger.Infof("unzipping %s to %s", src, dest)
 	r, err := zip.OpenReader(src)
 	if err != nil {
 		return err
@@ -350,20 +472,20 @@ func (s *windowsAutoupdateUpdater) DoCommand(ctx context.Context, cmd map[string
 	if err != nil {
 		return nil, err
 	}
-	// defer os.Remove(update)
+	defer os.Remove(update)
 
-	// Chcek if installer exists before uninstalling anything
-	installer, _, err := s.findInstaller(update)
+	// Check if installer exists before uninstalling anything
+	installer, dir, err := s.findInstaller(update)
 	if err != nil {
 		return nil, err
 	}
-	// defer func() {
-	// 	if dir != "" {
-	// 		os.RemoveAll(dir)
-	// 	} else {
-	// 		os.RemoveAll(installer)
-	// 	}
-	// }()
+	defer func() {
+		if dir != "" {
+			os.RemoveAll(dir)
+		} else {
+			os.RemoveAll(installer)
+		}
+	}()
 
 	if err := s.uninstallExistingInstallation(); err != nil && s.cfg.AbortOnUninstallErrors {
 		return nil, err
@@ -371,6 +493,13 @@ func (s *windowsAutoupdateUpdater) DoCommand(ctx context.Context, cmd map[string
 
 	if err := s.installUpdate(installer); err != nil {
 		return nil, err
+	}
+
+	// Update cache details to indicate that the update has been installed
+	cacheDetails := s.getCacheDetails()
+	cacheDetails.Installed = true
+	if err := s.setCacheDetails(cacheDetails); err != nil {
+		s.logger.Errorf("error setting cache details: %v", err)
 	}
 
 	return nil, nil

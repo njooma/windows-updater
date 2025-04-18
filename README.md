@@ -19,25 +19,23 @@ The following attributes are available for this model:
 | `install_args`              | []string | Optional  | Any args to pass                                                  |
 | `registry_lookup_key`       | string   | Optional  | Key for uninstaller                                               |
 | `registry_lookup_value`     | string   | Optional  | Value for uninstaller                                             |
-| `abort_on_uninstall_errors` | bool     | Optional  | Should the update should fail if uninstallatoin encounters errors |
+| `abort_on_uninstall_errors` | bool     | Optional  | Should the update should fail if uninstallation encounters errors |
+| `force_install`             | bool     | Optional  | Install the update regardless of if the update has changed        |
 
 #### Example Configuration
 
 ```json
 {
-  "installer_path": "Iss-0203\\DATSS_V0203_Setup.exe",
-  "registry_lookup_key": "Publisher",
+  "installer_path": "MyInstaller.exe",
   "install_args": [
-    "/SP-",
-    "/VERYSILENT",
-    "/SUPPRESSMSGBOXES",
-    "/NORESTART",
-    "/quiet",
-    "/passive"
+    "/passive",
+    "/norestart"
   ],
-  "registry_lookup_value": "Kongsberg Discovery Canada Ltd.",
-  "download_url": "https://www.simrad.club/datss/setup.zip",
-  "abort_on_uninstall_errors": true
+  "registry_lookup_key": "Publisher",
+  "registry_lookup_value": "My Windows Publisher, Inc.",
+  "download_url": "https://example.com/MyInstaller.zip",
+  "abort_on_uninstall_errors": true,
+  "force_install": false
 }
 ```
 
@@ -94,6 +92,11 @@ For example, you could provide the `registry_lookup_key` of "DisplayName", with 
 **OPTIONAL** default: `false`
 
 The module will first try to uninstall any existing installation (see `registry_lookup_key` and `registry_lookup_value`). Should the module encounter any errors, this flag will determine if the install process will abort or continue.
+
+### `force_install`
+**OPTIONAL** default: `false`
+
+The module will not attempt to download or install the update if it detects that nothing has changed (criteria: same URL, same content size, same etag). Use this option to force the update to download and install, regardless the lack of changes.
 
 ## Usage
 The module will begin to download the update immediately upon (re)configuration. Send an empty `doCommand` to this component to start the remainder of the update process.
